@@ -23,14 +23,16 @@ from torchmetrics.wrappers import BootStrapper
 from torchmetrics.metric import Metric
 
 
-def load_massspecgym(fold: T.Optional[str] = None) -> pd.DataFrame:
+def load_massspecgym(fold: T.Optional[str] = None, pth: T.Optional[Path] = None) -> pd.DataFrame:
     """
     Load the MassSpecGym dataset.
 
     Args:
         fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
     """
-    df = pd.read_csv(hugging_face_download("MassSpecGym.tsv"), sep="\t")
+    if pth is None:
+        pth = hugging_face_download("MassSpecGym.tsv")
+    df = pd.read_csv(pth, sep="\t")
     df = df.set_index("identifier")
     df['mzs'] = df['mzs'].apply(parse_spec_array)
     df['intensities'] = df['intensities'].apply(parse_spec_array)
