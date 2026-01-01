@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import torch
 import matchms
 import matchms.filtering as ms_filters
@@ -7,6 +8,8 @@ from typing import Optional
 from abc import ABC, abstractmethod
 import torch
 from torch_geometric.data import Batch
+from pathlib import Path
+import pickle
 
 from massspecgym.simulation_utils.feat_utils import MolGraphFeaturizer, get_fingerprints
 from massspecgym.simulation_utils.misc_utils import scatter_reduce
@@ -346,6 +349,79 @@ class MolToFingerprints(MolTransform):
         collate_data_d = {}
         collate_data_d["fps"] = torch.stack(batch_data_d["fps"],dim=0)
         return collate_data_d
+
+
+class InMemCachedMolTransform(MolTransform):
+
+    def __init__(
+        self,
+        cache_pkl_pth: Path | str,
+        mol_transform: Optional[MolTransform] = None,
+        smiles_list: Optional[list[str]] = None,
+        num_workers: Optional[int] = None,
+        verbose: bool = False
+    ):
+        """
+        In-memory caching wrapper for molecule transforms. 
+        This class builds or loads a cache mapping SMILES strings to the result
+        of a given molecule transformation (e.g., MolToInChIKey). 
+        If a cache file exists at `cache_pkl_pth`, it is loaded; otherwise, the cache is built using
+        the provided `smiles_list` and `mol_transform`, then saved to disk.
+        TODO: if `mol_transform` returns tensors, the cache can be optimized (e.g., by using hdf5 instead of pickle)
+        
+        Args:
+            cache_pkl_pth (Path | str): Filepath to store/load the cache (Pickle format).
+            mol_transform (Optional[MolTransform]): The molecular transformation to cache results for.
+            smiles_list (Optional[list[str]]): List of SMILES strings to cache transforms for (required if building).
+            num_workers (Optional[int]): Number of processes to use for building the cache (default: available CPUs - 1).
+            verbose (bool): If True, print progress/status information.
+        """
+        self.cache_pkl_pth = Path(cache_pkl_pth)
+        self.mol_transform = mol_transform
+        self.num_workers = num_workers if num_workers is not None else len(os.sched_getaffinity(0)) - 1
+        self.verbose = verbose
+        self.cache = {}
+        
+        if self.cache_pkl_pth.exists():
+            if self.verbose:
+                print(f"Loading cache from {self.cache_pkl_pth}...")
+            self._load_cache()
+        else:
+            if smiles_list is None or self.mol_transform is None:
+                raise ValueError("`smiles_list` and `mol_transform` are required to build the cache.")
+            if self.verbose:
+                print(f"Building cache and saving to {self.cache_pkl_pth}...")
+            self._build_cache(smiles_list)
+
+    def from_smiles(self, mol: str):
+        if mol not in self.cache:
+            raise ValueError(f"SMILES {mol} not found in cache.")
+        return self.cache[mol]
+    
+    @staticmethod
+    def _transform_smiles(args):
+        mol, mol_transform = args
+        return mol, mol_transform.from_smiles(mol)
+
+    def _build_cache(self, smiles_list: list[str]):
+        from tqdm import tqdm
+        import multiprocessing
+        import pickle
+
+        smiles_list = list(set(smiles_list))
+        args_iter = [(mol, self.mol_transform) for mol in smiles_list]
+        results = []
+        with multiprocessing.Pool(self.num_workers) as pool:
+            for mol, value in tqdm(
+                pool.imap_unordered(InMemCachedMolTransform._transform_smiles, args_iter), total=len(smiles_list), disable=not self.verbose):
+                results.append((mol, value))
+        self.cache = {mol: value for mol, value in results}
+        with open(self.cache_pkl_pth, "wb") as f:
+            pickle.dump(self.cache, f)
+    
+    def _load_cache(self):
+        with open(self.cache_pkl_pth, "rb") as f:
+            self.cache = pickle.load(f)
 
 
 class MetaTransform(ABC):
