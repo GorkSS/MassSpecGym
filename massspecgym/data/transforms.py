@@ -355,7 +355,7 @@ class InMemCachedMolTransform(MolTransform):
 
     def __init__(
         self,
-        cache_pkl_pth: Path | str,
+        cache_pkl_pth: Optional[Path | str] = None,
         mol_transform: Optional[MolTransform] = None,
         smiles_list: Optional[list[str]] = None,
         num_workers: Optional[int] = None,
@@ -376,24 +376,32 @@ class InMemCachedMolTransform(MolTransform):
             num_workers (Optional[int]): Number of processes to use for building the cache (default: available CPUs - 1).
             verbose (bool): If True, print progress/status information.
         """
-        self.cache_pkl_pth = Path(cache_pkl_pth)
+        self.cache_pkl_pth = Path(cache_pkl_pth) if cache_pkl_pth is not None else None
         self.mol_transform = mol_transform
-        self.num_workers = num_workers if num_workers is not None else len(os.sched_getaffinity(0)) - 1
+        self.num_workers = num_workers if num_workers is not None else max(1, len(os.sched_getaffinity(0)) - 1)
         self.verbose = verbose
         self.cache = {}
+
         
-        if self.cache_pkl_pth.exists():
+        verbose_prefix = f"Initializing InMemCachedMolTransform for {self.mol_transform.__class__.__name__}. "
+        if self.cache_pkl_pth is None:
+            self.cache = None
             if self.verbose:
-                print(f"Loading cache from {self.cache_pkl_pth}...")
+                print(verbose_prefix + "No cache path provided, will transform molecules on the fly.")
+        elif self.cache_pkl_pth is not None and self.cache_pkl_pth.exists():
+            if self.verbose:
+                print(verbose_prefix + f"Loading cache from {self.cache_pkl_pth}...")
             self._load_cache()
         else:
             if smiles_list is None or self.mol_transform is None:
                 raise ValueError("`smiles_list` and `mol_transform` are required to build the cache.")
             if self.verbose:
-                print(f"Building cache and saving to {self.cache_pkl_pth}...")
+                print(verbose_prefix + f"Building cache and saving to {self.cache_pkl_pth}...")
             self._build_cache(smiles_list)
 
     def from_smiles(self, mol: str):
+        if self.cache is None:
+            return self.mol_transform.from_smiles(mol)
         if mol not in self.cache:
             raise ValueError(f"SMILES {mol} not found in cache.")
         return self.cache[mol]
