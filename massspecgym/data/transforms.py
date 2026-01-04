@@ -200,6 +200,7 @@ class SpecToMzsInts(SpecTransform):
         collate_data_d["spec_batch_idxs"] = batch_idxs
         return collate_data_d
 
+
 class MolTransform(ABC):
     @abstractmethod
     def from_smiles(self, mol: str):
@@ -209,6 +210,9 @@ class MolTransform(ABC):
 
     def __call__(self, mol: str):
         return self.from_smiles(mol)
+    
+    def __str__(self):
+        return self.__class__.__name__
 
 
 class MolFingerprinter(MolTransform):
@@ -226,6 +230,9 @@ class MolFingerprinter(MolTransform):
         return utils.morgan_fp(
             mol, fp_size=self.fp_size, radius=self.radius, to_np=True
         )
+    
+    def __str__(self):
+        return f"{self.__class__.__name__}-type={self.type}-fp_size={self.fp_size}-radius={self.radius}"
 
 
 class MolToInChIKey(MolTransform):
