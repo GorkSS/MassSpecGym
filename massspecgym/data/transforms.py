@@ -358,85 +358,231 @@ class MolToFingerprints(MolTransform):
         return collate_data_d
 
 
-class InMemCachedMolTransform(MolTransform):
+import os
+from pathlib import Path
+from typing import Optional, Callable
 
+import numpy as np
+import torch
+
+
+# -----------------------------
+# Multiprocessing helpers
+# (MUST be at module scope)
+# -----------------------------
+_WORKER_TRANSFORM = None
+
+
+def _init_worker_from_factory(mol_transform_factory: Callable[[], MolTransform]):
+    global _WORKER_TRANSFORM
+    _WORKER_TRANSFORM = mol_transform_factory()
+
+
+def _init_worker_from_transform(mol_transform: MolTransform):
+    global _WORKER_TRANSFORM
+    _WORKER_TRANSFORM = mol_transform
+
+
+def _transform_smiles_worker(smi: str):
+    global _WORKER_TRANSFORM
+    return smi, _WORKER_TRANSFORM.from_smiles(smi)
+
+
+class InMemCachedMolTransform(MolTransform):
     def __init__(
         self,
-        cache_pkl_pth: Optional[Path | str] = None,
+        cache_pth: Optional[Path | str] = None,
         mol_transform: Optional[MolTransform] = None,
-        smiles_list: Optional[list[str]] = None,
-        num_workers: Optional[int] = None,
-        verbose: bool = False
+        mol_transform_factory: Optional[Callable[[], MolTransform]] = None,
+        strict: bool = False,
+        verbose: bool = False,
+        tensor_dtype: np.dtype = np.int16,   # vocab ~2000 fits in int16
+        compression: Optional[str] = None,
     ):
-        """
-        In-memory caching wrapper for molecule transforms. 
-        This class builds or loads a cache mapping SMILES strings to the result
-        of a given molecule transformation (e.g., MolToInChIKey). 
-        If a cache file exists at `cache_pkl_pth`, it is loaded; otherwise, the cache is built using
-        the provided `smiles_list` and `mol_transform`, then saved to disk.
-        TODO: if `mol_transform` returns tensors, the cache can be optimized (e.g., by using hdf5 instead of pickle)
-        
-        Args:
-            cache_pkl_pth (Path | str): Filepath to store/load the cache (Pickle format).
-            mol_transform (Optional[MolTransform]): The molecular transformation to cache results for.
-            smiles_list (Optional[list[str]]): List of SMILES strings to cache transforms for (required if building).
-            num_workers (Optional[int]): Number of processes to use for building the cache (default: available CPUs - 1).
-            verbose (bool): If True, print progress/status information.
-        """
-        self.cache_pkl_pth = Path(cache_pkl_pth) if cache_pkl_pth is not None else None
+        self.cache_pth = Path(cache_pth) if cache_pth is not None else None
         self.mol_transform = mol_transform
-        self.num_workers = num_workers if num_workers is not None else max(1, len(os.sched_getaffinity(0)) - 1)
+        self.mol_transform_factory = mol_transform_factory
+        self.strict = strict
         self.verbose = verbose
-        self.cache = {}
+        self.tensor_dtype = tensor_dtype
+        self.compression = compression
 
-        
-        verbose_prefix = f"Initializing InMemCachedMolTransform for {self.mol_transform.__class__.__name__}. "
-        if self.cache_pkl_pth is None:
-            self.cache = None
+        # cache can be:
+        #   None
+        #   dict (pickle)
+        #   np.ndarray [N, L] (tensor cache)
+        self.cache = None
+        self.smiles_to_i = None  # only for tensor cache
+
+        # Create a local transform for on-the-fly use if not provided
+        if self.mol_transform is None and self.mol_transform_factory is not None:
+            self.mol_transform = self.mol_transform_factory()
+
+        prefix = f"Initializing InMemCachedMolTransform for {self.mol_transform.__class__.__name__ if self.mol_transform else 'None'}. "
+        if self.cache_pth is not None and self.cache_pth.exists():
             if self.verbose:
-                print(verbose_prefix + "No cache path provided, will transform molecules on the fly.")
-        elif self.cache_pkl_pth is not None and self.cache_pkl_pth.exists():
-            if self.verbose:
-                print(verbose_prefix + f"Loading cache from {self.cache_pkl_pth}...")
+                print(prefix + f"Loading cache from {self.cache_pth}...")
             self._load_cache()
         else:
-            if smiles_list is None or self.mol_transform is None:
-                raise ValueError("`smiles_list` and `mol_transform` are required to build the cache.")
             if self.verbose:
-                print(verbose_prefix + f"Building cache and saving to {self.cache_pkl_pth}...")
-            self._build_cache(smiles_list)
+                print(
+                    prefix
+                    + "Cache file not provided or missing; molecules will be transformed on the fly. "
+                      "Call `build_cache(smiles_list)` to create it."
+                )
+
+    # ----------------------------
+    # Public API
+    # ----------------------------
 
     def from_smiles(self, mol: str):
         if self.cache is None:
             return self.mol_transform.from_smiles(mol)
+
+        if isinstance(self.cache, np.ndarray):
+            i = self.smiles_to_i.get(mol)
+            if i is None:
+                if self.strict:
+                    raise ValueError(f"SMILES {mol} not found in cache.")
+                else:
+                    return self.mol_transform.from_smiles(mol)
+            return torch.from_numpy(self.cache[i]).to(dtype=torch.long)
+
         if mol not in self.cache:
-            raise ValueError(f"SMILES {mol} not found in cache.")
+            if self.strict:
+                raise ValueError(f"SMILES {mol} not found in cache.")
+            else:
+                return self.mol_transform.from_smiles(mol)
         return self.cache[mol]
-    
-    @staticmethod
-    def _transform_smiles(args):
-        mol, mol_transform = args
-        return mol, mol_transform.from_smiles(mol)
 
-    def _build_cache(self, smiles_list: list[str]):
-        from tqdm import tqdm
+    # ----------------------------
+    # Cache building
+    # ----------------------------
+
+    def build_cache(self, smiles_list: list[str], num_workers: Optional[int] = None, force: bool = False):
+        if self.cache_pth is None:
+            raise ValueError("cache_pth must be set to build a cache.")
+
+        if self.cache_pth.exists() and not force:
+            if self.verbose:
+                print(f"Cache already exists at {self.cache_pth}. Skipping build.")
+            return
+
+        # avoid HF tokenizers fork warning / potential deadlocks
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        num_workers = num_workers if num_workers is not None else max(1, len(os.sched_getaffinity(0)) - 1)
+        smiles_list = sorted(set(smiles_list))
+
+        name = self.mol_transform.__class__.__name__ if self.mol_transform else "MolTransform"
+        if self.verbose:
+            print(f"Building {name} cache for {len(smiles_list)} SMILES using {num_workers} workers...")
+
+        suf = self.cache_pth.suffix.lower()
+        if suf in {".h5", ".hdf5"}:
+            probe = self.mol_transform.from_smiles(smiles_list[0])
+            if not isinstance(probe, torch.Tensor) or probe.ndim != 1:
+                raise TypeError("HDF5 cache requires mol_transform to return a 1D torch.Tensor.")
+            self._build_tensor_cache(smiles_list, int(probe.numel()), num_workers)
+        elif suf == ".pkl":
+            self._build_pickle_cache(smiles_list, num_workers)
+        else:
+            raise ValueError(f"Unsupported cache suffix: {self.cache_pth.suffix}")
+
+        self._load_cache()
+
+        if self.verbose:
+            if isinstance(self.cache, np.ndarray):
+                print(f"Cached {len(smiles_list)} SMILES into tensor cache {self.cache.shape} at {self.cache_pth}.")
+            else:
+                print(f"Cached {len(self.cache)} SMILES into dict cache at {self.cache_pth}.")
+
+    def _pool(self, num_workers: int):
+        """
+        Create a Pool that initializes a worker-local transform.
+        Preference:
+          - mol_transform_factory (best for HF tokenizers / non-picklable)
+          - else mol_transform instance (must be picklable)
+        """
         import multiprocessing
-        import pickle
 
-        smiles_list = list(set(smiles_list))
-        args_iter = [(mol, self.mol_transform) for mol in smiles_list]
-        results = []
-        with multiprocessing.Pool(self.num_workers) as pool:
-            for mol, value in tqdm(
-                pool.imap_unordered(InMemCachedMolTransform._transform_smiles, args_iter), total=len(smiles_list), disable=not self.verbose):
-                results.append((mol, value))
-        self.cache = {mol: value for mol, value in results}
-        with open(self.cache_pkl_pth, "wb") as f:
-            pickle.dump(self.cache, f)
-    
+        if self.mol_transform_factory is not None:
+            return multiprocessing.Pool(
+                processes=num_workers,
+                initializer=_init_worker_from_factory,
+                initargs=(self.mol_transform_factory,),
+            )
+        else:
+            # This will pickle mol_transform once to each worker.
+            # If mol_transform isn't picklable, user must provide mol_transform_factory.
+            return multiprocessing.Pool(
+                processes=num_workers,
+                initializer=_init_worker_from_transform,
+                initargs=(self.mol_transform,),
+            )
+
+    def _build_pickle_cache(self, smiles_list: list[str], num_workers: int):
+        import pickle
+        from tqdm import tqdm
+
+        self.cache_pth.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build dict in parallel without pickling mol_transform per task
+        with self._pool(num_workers) as pool:
+            it = pool.imap_unordered(_transform_smiles_worker, smiles_list, chunksize=512)
+            cache = dict(
+                tqdm(it, total=len(smiles_list), disable=not self.verbose)
+            )
+
+        with open(self.cache_pth, "wb") as f:
+            pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _build_tensor_cache(self, smiles_list: list[str], length: int, num_workers: int):
+        import h5py
+        from tqdm import tqdm
+
+        idx = {s: i for i, s in enumerate(smiles_list)}
+        mat = np.empty((len(smiles_list), length), dtype=self.tensor_dtype)
+
+        with self._pool(num_workers) as pool:
+            it = pool.imap_unordered(_transform_smiles_worker, smiles_list, chunksize=512)
+            for smi, val in tqdm(it, total=len(smiles_list), disable=not self.verbose):
+                if not isinstance(val, torch.Tensor) or val.ndim != 1:
+                    raise TypeError("Transform output changed type; expected 1D torch.Tensor.")
+                if val.numel() != length:
+                    raise ValueError("Non-constant tensor length detected.")
+                mat[idx[smi]] = val.detach().cpu().numpy().astype(self.tensor_dtype, copy=False)
+
+        self.cache_pth.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(self.cache_pth, "w") as h5:
+            h5.create_dataset("smiles", data=np.array(smiles_list, dtype="S"), compression=self.compression)
+            h5.create_dataset("tensor", data=mat, compression=self.compression)
+
+    # ----------------------------
+    # Cache loading
+    # ----------------------------
+
     def _load_cache(self):
-        with open(self.cache_pkl_pth, "rb") as f:
-            self.cache = pickle.load(f)
+        suf = self.cache_pth.suffix.lower()
+        if suf in {".h5", ".hdf5"}:
+            self._load_tensor_cache()
+        elif suf == ".pkl":
+            import pickle
+            with open(self.cache_pth, "rb") as f:
+                self.cache = pickle.load(f)
+            self.smiles_to_i = None
+        else:
+            raise ValueError(f"Unsupported cache suffix: {self.cache_pth.suffix}")
+
+    def _load_tensor_cache(self):
+        import h5py
+        with h5py.File(self.cache_pth, "r") as h5:
+            smiles = [s.decode("utf-8") for s in h5["smiles"][...]]
+            self.smiles_to_i = {s: i for i, s in enumerate(smiles)}
+            self.cache = h5["tensor"][...]  # load into RAM
+
+    def __str__(self):
+        return f"{self.__class__.__name__}-mol_transform={self.mol_transform.__class__.__name__}"
 
 
 class MetaTransform(ABC):
