@@ -506,3 +506,29 @@ def parse_sirius_ms(spectra_file: str) -> T.Tuple[dict, T.List[T.Tuple[str, np.n
     metadata["_FILE_PATH"] = spectra_file
     metadata["_FILE"] = Path(spectra_file).stem
     return metadata, spectras
+
+
+def rdkit_canonical_smiles(
+    smi: str, return_outcome: bool = False
+) -> T.Union[str, T.Tuple[str, str]]:
+    """Convert a SMILES string to its RDKit canonical form.
+
+    Args:
+        smi: Input SMILES string.
+        return_outcome: If ``True``, returns a ``(canonical_smiles, outcome)``
+            tuple where *outcome* is one of ``"canonical_true"``,
+            ``"canonical_fallback"``, or ``"kept_original"``.
+            Defaults to ``False``.
+    """
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        result, outcome = smi, "kept_original"
+    else:
+        try:
+            result, outcome = Chem.MolToSmiles(mol, canonical=True), "canonical_true"
+        except Exception:
+            try:
+                result, outcome = Chem.MolToSmiles(mol), "canonical_fallback"
+            except Exception:
+                result, outcome = smi, "kept_original"
+    return (result, outcome) if return_outcome else result
