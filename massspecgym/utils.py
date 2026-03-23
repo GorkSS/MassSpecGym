@@ -19,6 +19,7 @@ from rdkit.Chem import AllChem as Chem
 from rdkit.Chem import DataStructs, Draw
 from rdkit.Chem.Descriptors import ExactMolWt
 from huggingface_hub import hf_hub_download
+from scipy.stats import bootstrap
 from torchmetrics.wrappers import BootStrapper
 from torchmetrics.metric import Metric
 
@@ -532,3 +533,9 @@ def rdkit_canonical_smiles(
             except Exception:
                 result, outcome = smi, "kept_original"
     return (result, outcome) if return_outcome else result
+
+
+def get_ci(vals, confidence_level=0.999, n_resamples=20_000, seed=0):
+    res = bootstrap((vals,), np.mean, confidence_level=confidence_level, n_resamples=n_resamples, random_state=seed)
+    ci = res.confidence_interval
+    return ci.low, ci.high
