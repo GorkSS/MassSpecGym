@@ -216,21 +216,44 @@ class MolTransform(ABC):
 
 
 class MolFingerprinter(MolTransform):
+    """Molecular fingerprinter supporting multiple fingerprint types and concatenation.
+
+    Supported types: "morgan", "maccs", "map4", or comma-separated combos like "morgan,maccs,map4".
+    """
     def __init__(self, type: str = "morgan", fp_size: int = 2048, radius: int = 2):
-        if type != "morgan":
-            raise NotImplementedError(
-                "Only Morgan fingerprints are implemented at the moment."
-            )
         self.type = type
         self.fp_size = fp_size
         self.radius = radius
+        self.fp_types = [t.strip() for t in type.split(",")]
+        for t in self.fp_types:
+            if t not in ("morgan", "maccs", "map4"):
+                raise ValueError(f"Unknown fingerprint type: {t}. Supported: morgan, maccs, map4")
+        if "map4" in self.fp_types:
+            from map4 import MAP4
+            self._map4_calc = MAP4(dimensions=fp_size, radius=radius)
 
-    def from_smiles(self, mol: str):
-        mol = Chem.MolFromSmiles(mol)
-        return utils.morgan_fp(
-            mol, fp_size=self.fp_size, radius=self.radius, to_np=True
-        )
-    
+    def _morgan_fp(self, mol):
+        return utils.morgan_fp(mol, fp_size=self.fp_size, radius=self.radius, to_np=True)
+
+    def _maccs_fp(self, mol):
+        from rdkit.Chem import MACCSkeys
+        return np.array(MACCSkeys.GenMACCSKeys(mol), dtype=np.float32)
+
+    def _map4_fp(self, mol):
+        return self._map4_calc.calculate(mol).astype(np.float32)
+
+    def from_smiles(self, smiles: str):
+        mol = Chem.MolFromSmiles(smiles)
+        fps = []
+        for t in self.fp_types:
+            if t == "morgan":
+                fps.append(self._morgan_fp(mol))
+            elif t == "maccs":
+                fps.append(self._maccs_fp(mol))
+            elif t == "map4":
+                fps.append(self._map4_fp(mol))
+        return np.concatenate(fps) if len(fps) > 1 else fps[0]
+
     def __str__(self):
         return f"{self.__class__.__name__}-type={self.type}-fp_size={self.fp_size}-radius={self.radius}"
 
