@@ -236,6 +236,8 @@ class RetrievalDataset(MassSpecDataset):
             item[key] = transform(item["mol"]) if transform is not None else item["mol"]
             if isinstance(item[key], np.ndarray):
                 item[key] = torch.as_tensor(item[key], dtype=self.dtype)
+            elif isinstance(item[key], torch.Tensor) and not item[key].is_floating_point() and key != "tokens":
+                item[key] = item[key].to(dtype=self.dtype)
 
             if return_candidates:
                 item["candidates_"+key] = [transform(c) if transform is not None else c for c in candidates]

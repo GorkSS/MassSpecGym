@@ -421,6 +421,7 @@ class InMemCachedMolTransform(MolTransform):
         verbose: bool = False,
         tensor_dtype: np.dtype = np.int16,   # vocab ~2000 fits in int16
         compression: Optional[str] = None,
+        output_dtype: Optional[torch.dtype] = None,  # e.g., torch.float32 for fingerprints
     ):
         self.cache_pth = Path(cache_pth) if cache_pth is not None else None
         self.mol_transform = mol_transform
@@ -429,6 +430,7 @@ class InMemCachedMolTransform(MolTransform):
         self.verbose = verbose
         self.tensor_dtype = tensor_dtype
         self.compression = compression
+        self.output_dtype = output_dtype if output_dtype is not None else torch.long
 
         # cache can be:
         #   None
@@ -469,7 +471,7 @@ class InMemCachedMolTransform(MolTransform):
                     raise ValueError(f"SMILES {mol} not found in cache.")
                 else:
                     return self.mol_transform.from_smiles(mol)
-            return torch.from_numpy(self.cache[i]).to(dtype=torch.long)
+            return torch.from_numpy(self.cache[i]).to(dtype=self.output_dtype)
 
         if mol not in self.cache:
             if self.strict:
