@@ -34,6 +34,8 @@ setup(
         "networkx==3.3",
         "selfies==2.1.2",
         "pulp==2.9.0"  # for myopic-mces
+        "gensim==4.4.0",   # ← añadido para ChemEmbed
+        "mol2vec==0.2.2",  # ← añadido para ChemEmbed
     ],
     extras_require={
         "dev": [
