@@ -77,6 +77,8 @@ class MassSpecDataModule(pl.LightningDataModule):
                 self.dataset, np.where(self.split_mask == "train")[0]
             )
             self.val_dataset = Subset(self.dataset, np.where(self.split_mask == "val")[0])
+        elif stage == "validate":
+            self.val_dataset = Subset(self.dataset, np.where(self.split_mask == "val")[0])
         elif stage == "test":
             self.test_dataset = Subset(self.dataset, np.where(self.split_mask == "test")[0])
         else:

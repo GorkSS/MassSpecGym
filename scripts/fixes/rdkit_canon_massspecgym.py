@@ -1,10 +1,10 @@
-"""Canonicalize all SMILES in MassSpecGym with RDKit.
+"""Canonicalize all SMILES in MassSpecGym with RDKit (v1.5 release).
 
 Produces:
-  - MassSpecGym_RDKit_SMILES.tsv  (smiles column canonicalized)
-  - MassSpecGym_RDKit_SMILES.mgf  (MGF export of the above)
-  - MassSpecGym_retrieval_candidates_formula_RDKit_SMILES.json
-  - MassSpecGym_retrieval_candidates_mass_RDKit_SMILES.json
+  - MassSpecGym1.5.tsv  (smiles column canonicalized)
+  - MassSpecGym1.5.mgf  (MGF export of the above)
+  - MassSpecGym1.5_retrieval_candidates_formula.json
+  - MassSpecGym1.5_retrieval_candidates_mass.json
 
 All SMILES (TSV column, JSON keys, and ALL JSON candidate values) are
 canonicalized with massspecgym.utils.rdkit_canonical_smiles.
@@ -12,6 +12,7 @@ canonicalized with massspecgym.utils.rdkit_canonical_smiles.
 
 import json
 import logging
+import random
 import sys
 from collections import Counter
 from pathlib import Path
@@ -32,14 +33,16 @@ RDLogger.logger().setLevel(RDLogger.CRITICAL)
 
 BASE = Path("/scratch/project_465002061/rbushuie/DreaMS-Mol_dev")
 TSV_IN = BASE / "MassSpecGym/data/MassSpecGym.tsv"
-TSV_OUT = BASE / "MassSpecGym/data/MassSpecGym_RDKit_SMILES.tsv"
-MGF_OUT = BASE / "MassSpecGym/data/MassSpecGym_RDKit_SMILES.mgf"
+TSV_OUT = BASE / "MassSpecGym/data/MassSpecGym1.5.tsv"
+MGF_OUT = BASE / "MassSpecGym/data/MassSpecGym1.5.mgf"
 
 CAND_JSONS = [
     BASE / "MassSpecGym/data/MassSpecGym_retrieval_candidates_formula.json",
     BASE / "MassSpecGym/data/MassSpecGym_retrieval_candidates_mass.json",
 ]
 JSON_OUT_DIR = BASE / "MassSpecGym/data"
+
+JSON_SANITY_SAMPLE = 2000  # random keys+first-cands probed before re-canonicalization
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,6 +83,40 @@ def main():
 
     log.info("Total unique SMILES across TSV + all JSONs: %d", len(all_smiles))
 
+    # ── 1b. JSON canonicality sanity check ───────────────────────────────
+    # Documentation step: we ALWAYS proceed to full re-canonicalization in step 2.
+    # This block just empirically reports how much of each input JSON would change,
+    # so a reader can confirm that re-canonicalizing the JSONs is (or isn't) necessary.
+    log.info("--- JSON canonicality sanity check ---")
+    rng = random.Random(0)
+    for json_path, cands in json_data.items():
+        keys = list(cands.keys())
+        n_sample = min(JSON_SANITY_SAMPLE, len(keys))
+        sample_keys = rng.sample(keys, n_sample)
+        n_keys_changed = 0
+        n_vals_total = 0
+        n_vals_changed = 0
+        for k in sample_keys:
+            kc = utils.rdkit_canonical_smiles(k)
+            if kc != k:
+                n_keys_changed += 1
+            vals = cands[k]
+            if vals:
+                v = vals[0]
+                vc = utils.rdkit_canonical_smiles(v)
+                n_vals_total += 1
+                if vc != v:
+                    n_vals_changed += 1
+        log.info(
+            "  %s: %d/%d keys (%.2f%%) and %d/%d first-candidates (%.2f%%) "
+            "would change under re-canonicalization.",
+            json_path.name,
+            n_keys_changed, n_sample,
+            100.0 * n_keys_changed / max(1, n_sample),
+            n_vals_changed, n_vals_total,
+            100.0 * n_vals_changed / max(1, n_vals_total),
+        )
+
     # ── 2. Build global canonical mapping ────────────────────────────────
     log.info("Canonicalizing %d unique SMILES ...", len(all_smiles))
     canon_map: dict[str, str] = {}
@@ -96,6 +133,7 @@ def main():
     log.info("  SMILES that changed:         %d", n_changed)
 
     # ── 3. Replace SMILES in TSV and validate properties ─────────────────
+    orig_smiles_col = df["smiles"].copy()
     df["smiles"] = df["smiles"].map(canon_map)
 
     log.info("Validating formula, parent_mass, inchikey against canonical SMILES ...")
@@ -104,11 +142,13 @@ def main():
     MASS_TOL = 0.1
 
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Validating"):
-        mol = Chem.MolFromSmiles(row["smiles"])
+        new_smi = row["smiles"]
+        orig_smi = orig_smiles_col.iloc[idx] if hasattr(orig_smiles_col, "iloc") else orig_smiles_col[idx]
+        mol = Chem.MolFromSmiles(new_smi)
         if mol is None:
             error_counts["parse_failed"] += 1
             validation_errors.append(
-                f"[parse_failed] Row {idx}: cannot parse '{row['smiles']}'")
+                f"[parse_failed] Row {idx}: cannot parse new_smi='{new_smi}' orig_smi='{orig_smi}'")
             continue
 
         computed_formula = rdMolDescriptors.CalcMolFormula(mol)
@@ -123,17 +163,20 @@ def main():
         if computed_formula != orig_formula:
             error_counts["formula_mismatch"] += 1
             validation_errors.append(
-                f"[formula_mismatch] Row {idx}: orig='{orig_formula}' computed='{computed_formula}' smi='{row['smiles']}'")
+                f"[formula_mismatch] Row {idx}: stored='{orig_formula}' computed='{computed_formula}' "
+                f"orig_smi='{orig_smi}' new_smi='{new_smi}'")
 
         if abs(computed_mass - orig_mass) >= MASS_TOL:
             error_counts["mass_mismatch"] += 1
             validation_errors.append(
-                f"[mass_mismatch] Row {idx}: orig={orig_mass} computed={computed_mass} smi='{row['smiles']}'")
+                f"[mass_mismatch] Row {idx}: stored={orig_mass} computed={computed_mass} "
+                f"orig_smi='{orig_smi}' new_smi='{new_smi}'")
 
         if computed_ik != orig_ik:
             error_counts["inchikey_mismatch"] += 1
             validation_errors.append(
-                f"[inchikey_mismatch] Row {idx}: orig='{orig_ik}' computed='{computed_ik}' smi='{row['smiles']}'")
+                f"[inchikey_mismatch] Row {idx}: stored='{orig_ik}' computed='{computed_ik}' "
+                f"orig_smi='{orig_smi}' new_smi='{new_smi}'")
 
     log.info("--- Property validation summary ---")
     log.info("  Total rows: %d", len(df))
@@ -195,7 +238,7 @@ def main():
 
         stem = json_in_path.stem.replace("MassSpecGym_retrieval_candidates_", "")
         stem_tag = stem.split("_")[0]
-        json_out_path = JSON_OUT_DIR / f"MassSpecGym_retrieval_candidates_{stem_tag}_RDKit_SMILES.json"
+        json_out_path = JSON_OUT_DIR / f"MassSpecGym1.5_retrieval_candidates_{stem_tag}.json"
 
         log.info("Writing %s ...", json_out_path)
         with open(json_out_path, "w") as f:
