@@ -1,8 +1,8 @@
 # wandb
 wandb_name: "demo"
 # data
-pth: "MassSpecGym.tsv"
-# candidates_pth: "molecules/MassSpecGym_retrieval_candidates_mass.json"
+pth: "MassSpecGym1.5.tsv"
+# candidates_pth: "molecules/MassSpecGym1.5_retrieval_candidates_mass.json"
 split_type: "benchmark"
 subsample_frac: 0.01 # 1.0
 # output
