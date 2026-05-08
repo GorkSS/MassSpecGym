@@ -152,6 +152,7 @@ wandb/
 
 # Figures
 /figures/
+notebooks/**/figures/
 
 # SLURM / HPC job logs
 *.err
