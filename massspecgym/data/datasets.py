@@ -51,7 +51,7 @@ class MassSpecDataset(Dataset):
     def load_data(self):
 
         if self.pth is None:
-            self.pth = utils.hugging_face_download("MassSpecGym.tsv")
+            self.pth = utils.hugging_face_download("MassSpecGym1.5.tsv")
 
         if isinstance(self.pth, str):
             self.pth = Path(self.pth)
@@ -177,11 +177,11 @@ class RetrievalDataset(MassSpecDataset):
         # Download candidates from HuggigFace Hub if not a path to exisiting file is passed
         if self.candidates_pth == 'standard':
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_mass.json"
             )
         elif self.candidates_pth == 'bonus':
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_formula.json"
             )
         elif isinstance(self.candidates_pth, str):
             if Path(self.candidates_pth).is_file():
@@ -331,7 +331,7 @@ class SimulationDataset(MassSpecDataset):
         # download if necessary
         if self.pth is None:
             self.pth = utils.hugging_face_download(
-                "MassSpecGym.tsv"
+                "MassSpecGym1.5.tsv"
             )
         else: 
             assert isinstance(self.pth, str)
@@ -441,7 +441,7 @@ class RetrievalSimulationDataset(SimulationDataset):
         # Download candidates from HuggigFace Hub
         if self.candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_mass.json"
             )
         else: 
             assert isinstance(self.candidates_pth, str)

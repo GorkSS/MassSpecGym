@@ -32,7 +32,7 @@ def load_massspecgym(fold: T.Optional[str] = None, pth: T.Optional[Path] = None)
         fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
     """
     if pth is None:
-        pth = hugging_face_download("MassSpecGym.tsv")
+        pth = hugging_face_download("MassSpecGym1.5.tsv")
     df = pd.read_csv(pth, sep="\t")
     df = df.set_index("identifier")
     df['mzs'] = df['mzs'].apply(parse_spec_array)
