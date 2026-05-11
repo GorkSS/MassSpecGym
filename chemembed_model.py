@@ -15,18 +15,19 @@ class ChemEmbedRetrieval(RetrievalMassSpecGymModel):
         x = x.unsqueeze(1)
         return self.cnn(x)
 
-    def step(self, batch: dict, stage: Stage) -> dict:
+
+    def step(self, batch, stage):
         x = batch["spec"]
         mol_true = batch["mol"]
-        cands = batch["candidates_mol"]
-        batch_ptr = batch["batch_ptr"]
-
         mol_pred = self.forward(x)
-
         loss = nn.functional.mse_loss(mol_pred, mol_true)
 
-        mol_pred_repeated = mol_pred.repeat_interleave(batch_ptr, dim=0)
-        scores = nn.functional.cosine_similarity(mol_pred_repeated, cands)
+        scores = None
+        if stage == Stage.TEST:
+            cands = batch["candidates_mol"]
+            batch_ptr = batch["batch_ptr"]
+            mol_pred_repeated = mol_pred.repeat_interleave(batch_ptr, dim=0)
+            scores = nn.functional.cosine_similarity(mol_pred_repeated, cands)
 
         return dict(loss=loss, scores=scores)
 

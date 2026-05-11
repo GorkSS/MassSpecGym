@@ -50,13 +50,22 @@ class ChemEmbedMolTransform(MolTransform):
     
     def __init__(self, model_path):
         self.model = word2vec.Word2Vec.load(model_path)
-
-    def from_smiles(self, smiles: str):
+    
+    def from_smiles(self, smiles: str) -> np.ndarray:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return torch.zeros(300, dtype=torch.float32)
+            return np.zeros(300, dtype=np.float32)
 
         sentence = MolSentence(mol2alt_sentence(mol, radius=1))
         vec = sentences2vec([sentence], self.model)[0]
+        return vec.astype(np.float32)  # numpy array shape (300,)
 
-        return torch.tensor(vec, dtype=torch.float32)  # torch tensor shape (300,)
+    # def from_smiles(self, smiles: str):
+    #     mol = Chem.MolFromSmiles(smiles)
+    #     if mol is None:
+    #         return torch.zeros(300, dtype=torch.float32)
+
+    #     sentence = MolSentence(mol2alt_sentence(mol, radius=1))
+    #     vec = sentences2vec([sentence], self.model)[0]
+
+    #     return torch.tensor(vec, dtype=torch.float32)  # torch tensor shape (300,)
