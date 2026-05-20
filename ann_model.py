@@ -44,14 +44,14 @@ class EarlyStopping:
 
 
 class ANN_Class(nn.Module):
-    def __init__(self, input_dim = 1000):
+    def __init__(self, input_dim=1000, output_dim=300):
         super(ANN_Class, self).__init__()
 
-        self.fc1 = nn.Linear(input_dim, 2048)  
+        self.fc1 = nn.Linear(input_dim, 2048)
 
         self.fc2 = nn.Linear(2048, 1024)
 
-        self.fc3 = nn.Linear(1024, 300)
+        self.fc3 = nn.Linear(1024, output_dim)
 
         self.dropout = nn.Dropout(0.25)
 

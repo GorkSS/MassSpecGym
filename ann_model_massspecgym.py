@@ -6,9 +6,9 @@ from ann_model import ANN_Class
 
 class AnnRetrieval(RetrievalMassSpecGymModel):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, mol_embedding_dim=300, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.ann = ANN_Class(input_dim=70000)
+        self.ann = ANN_Class(input_dim=70000, output_dim=mol_embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: (batch_size, 70000)

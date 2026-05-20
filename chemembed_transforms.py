@@ -7,6 +7,7 @@ from massspecgym.data.transforms import SpecTransform, MolTransform
 from mol2vec.features import mol2alt_sentence, MolSentence, sentences2vec
 from gensim.models import word2vec
 from rdkit import Chem
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModel
 
 
 class ChemEmbedSpecTransform(SpecTransform):
@@ -74,3 +75,36 @@ class ChemEmbedMolTransform(MolTransform):
     #     vec = sentences2vec([sentence], self.model)[0]
 
     #     return torch.tensor(vec, dtype=torch.float32)  # torch tensor shape (300,)
+
+
+class ChemBERTaMolTransform(MolTransform):
+
+    def __init__(self, model_name: str = "DeepChem/ChemBERTa-100M-MLM"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name)
+        self.model.eval()
+
+    def from_smiles(self, smiles: str) -> np.ndarray:
+        canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), canonical=True, isomericSmiles=False)
+        inputs = self.tokenizer(canonical, return_tensors="pt")
+        with torch.no_grad():
+            outputs = self.model(**inputs, output_hidden_states=True)
+        
+        hidden_states = outputs.hidden_states[-1] #Last layer
+        molecule_embeddings = hidden_states[:, 0, :] #CLS token
+        return molecule_embeddings[0].numpy().astype(np.float32)
+
+
+class MoLFormerMolTransform(MolTransform):
+
+    def __init__(self, model_name: str = "ibm/MoLFormer-XL-both-10pct"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(model_name, deterministic_eval=True, trust_remote_code=True)
+        self.model.eval()
+
+    def from_smiles(self, smiles: str) -> np.ndarray:
+        canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), canonical=True, isomericSmiles=False)
+        inputs = self.tokenizer(canonical, return_tensors="pt")
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        return outputs.pooler_output[0].numpy().astype(np.float32)
