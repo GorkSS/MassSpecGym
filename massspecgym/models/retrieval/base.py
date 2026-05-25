@@ -15,7 +15,7 @@ class RetrievalMassSpecGymModel(MassSpecGymModel, ABC):
 
     def __init__(
         self,
-        at_ks: T.Iterable[int] = (1, 5, 20), 
+        at_ks: T.Iterable[int] = (1, 5, 20),
         myopic_mces_kwargs: T.Optional[T.Mapping] = None,
         *args,
         **kwargs
@@ -23,6 +23,13 @@ class RetrievalMassSpecGymModel(MassSpecGymModel, ABC):
         super().__init__(*args, **kwargs)
         self.at_ks = at_ks
         self.myopic_mces = utils.MyopicMCES(**(myopic_mces_kwargs or {}))
+
+    def get_checkpoint_monitors(self) -> list[dict]:
+        pref = Stage.VAL.to_pref()
+        return [
+            {"monitor": f"{pref}hit_rate@1", "mode": "max", "early_stopping": True},
+            {"monitor": f"{pref}loss", "mode": "min", "early_stopping": False},
+        ]
 
     def on_batch_end(
         self, outputs: T.Any, batch: dict, batch_idx: int, stage: Stage

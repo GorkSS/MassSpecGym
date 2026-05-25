@@ -19,18 +19,21 @@ from rdkit.Chem import AllChem as Chem
 from rdkit.Chem import DataStructs, Draw
 from rdkit.Chem.Descriptors import ExactMolWt
 from huggingface_hub import hf_hub_download
+from scipy.stats import bootstrap
 from torchmetrics.wrappers import BootStrapper
 from torchmetrics.metric import Metric
 
 
-def load_massspecgym(fold: T.Optional[str] = None) -> pd.DataFrame:
+def load_massspecgym(fold: T.Optional[str] = None, pth: T.Optional[Path] = None) -> pd.DataFrame:
     """
     Load the MassSpecGym dataset.
 
     Args:
         fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
     """
-    df = pd.read_csv(hugging_face_download("MassSpecGym.tsv"), sep="\t")
+    if pth is None:
+        pth = hugging_face_download("MassSpecGym1.5.tsv")
+    df = pd.read_csv(pth, sep="\t")
     df = df.set_index("identifier")
     df['mzs'] = df['mzs'].apply(parse_spec_array)
     df['intensities'] = df['intensities'].apply(parse_spec_array)
@@ -504,3 +507,35 @@ def parse_sirius_ms(spectra_file: str) -> T.Tuple[dict, T.List[T.Tuple[str, np.n
     metadata["_FILE_PATH"] = spectra_file
     metadata["_FILE"] = Path(spectra_file).stem
     return metadata, spectras
+
+
+def rdkit_canonical_smiles(
+    smi: str, return_outcome: bool = False
+) -> T.Union[str, T.Tuple[str, str]]:
+    """Convert a SMILES string to its RDKit canonical form.
+
+    Args:
+        smi: Input SMILES string.
+        return_outcome: If ``True``, returns a ``(canonical_smiles, outcome)``
+            tuple where *outcome* is one of ``"canonical_true"``,
+            ``"canonical_fallback"``, or ``"kept_original"``.
+            Defaults to ``False``.
+    """
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        result, outcome = smi, "kept_original"
+    else:
+        try:
+            result, outcome = Chem.MolToSmiles(mol, canonical=True), "canonical_true"
+        except Exception:
+            try:
+                result, outcome = Chem.MolToSmiles(mol), "canonical_fallback"
+            except Exception:
+                result, outcome = smi, "kept_original"
+    return (result, outcome) if return_outcome else result
+
+
+def get_ci(vals, confidence_level=0.999, n_resamples=20_000, seed=0):
+    res = bootstrap((vals,), np.mean, confidence_level=confidence_level, n_resamples=n_resamples, random_state=seed)
+    ci = res.confidence_interval
+    return ci.low, ci.high

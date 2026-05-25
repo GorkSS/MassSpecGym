@@ -51,7 +51,7 @@ class MassSpecDataset(Dataset):
     def load_data(self):
 
         if self.pth is None:
-            self.pth = utils.hugging_face_download("MassSpecGym.tsv")
+            self.pth = utils.hugging_face_download("MassSpecGym1.5.tsv")
 
         if isinstance(self.pth, str):
             self.pth = Path(self.pth)
@@ -152,7 +152,7 @@ class RetrievalDataset(MassSpecDataset):
     def __init__(
         self,
         mol_label_transform: MolTransform = MolToInChIKey(),
-        candidates_pth: T.Optional[T.Union[Path, str]] = None,
+        candidates_pth: T.Optional[T.Union[Path, str]] = 'standard',
         **kwargs,
     ):
         """
@@ -160,9 +160,10 @@ class RetrievalDataset(MassSpecDataset):
             mol_label_transform (MolTransform, optional): Transformation to apply to the candidate molecules.
                 Defaults to `MolToInChIKey()`.
             candidates_pth (Optional[Union[Path, str]], optional): Path to the .json file containing the candidates for
-                retrieval. Defaults to None, in which case the candidates for standard `molecular retrieval` challenge
+                retrieval. Defaults to 'standard', in which case the candidates for standard `molecular retrieval` challenge
                 are downloaded from HuggingFace Hub. If set to `bonus`, the candidates based on molecular formulas
-                for the `bonus chemical formulae challenge` are downloaded instead.
+                for the `bonus chemical formulae challenge` are downloaded instead. If set to a path to an existing file,
+                the candidates are loaded from the file. If set to None, no candidates are loaded.
         """
         # note: __init__ calls load_data, these variables are required for load_data to work properly
         self.mol_label_transform = mol_label_transform
@@ -174,48 +175,54 @@ class RetrievalDataset(MassSpecDataset):
         super().load_data()
 
         # Download candidates from HuggigFace Hub if not a path to exisiting file is passed
-        if self.candidates_pth is None:
+        if self.candidates_pth == 'standard':
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_mass.json"
             )
         elif self.candidates_pth == 'bonus':
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_formula.json"
             )
         elif isinstance(self.candidates_pth, str):
             if Path(self.candidates_pth).is_file():
                 self.candidates_pth = Path(self.candidates_pth)
             else:
                 self.candidates_pth = utils.hugging_face_download(self.candidates_pth)
+        elif self.candidates_pth is None:
+            self.candidates = None
+        else:
+            raise ValueError(f"Invalid candidates_pth: {self.candidates_pth}")
 
         # Read candidates_pth from json to dict: SMILES -> respective candidate SMILES
-        with open(self.candidates_pth, "r") as file:
-            self.candidates = json.load(file)
+        if self.candidates_pth is not None:
+            with open(self.candidates_pth, "r") as file:
+                self.candidates = json.load(file)
 
-    def __getitem__(self, i) -> dict:
+    def __getitem__(self, i, return_candidates: bool = True) -> dict:
         item = super().__getitem__(i, transform_mol=False)
 
         # Save the original SMILES representation of the query molecule (for evaluation)
         item["smiles"] = item["mol"]
 
         # Get candidates
-        if item["mol"] not in self.candidates:
-            raise ValueError(f'No candidates for the query molecule {item["mol"]}.')
-        item["candidates"] = self.candidates[item["mol"]]
+        if return_candidates:
+            if item["mol"] not in self.candidates:
+                raise ValueError(f'No candidates for the query molecule {item["mol"]}.')
+            candidates = self.candidates[item["mol"]]
 
-        # Save the original SMILES representations of the canidates (for evaluation)
-        item["candidates_smiles"] = item["candidates"]
+            # Save the original SMILES representations of the canidates (for evaluation)
+            item["candidates_smiles"] = candidates
 
-        # Create neg/pos label mask by matching the query molecule with the candidates
-        item_label = self.mol_label_transform(item["mol"])
-        item["labels"] = [
-            self.mol_label_transform(c) == item_label for c in item["candidates"]
-        ]
+            # Create neg/pos label mask by matching the query molecule with the candidates
+            item_label = self.mol_label_transform(item["mol"])
+            item["labels"] = [
+                self.mol_label_transform(c) == item_label for c in candidates
+            ]
 
-        if not any(item["labels"]):
-            raise ValueError(
-                f'Query molecule {item["mol"]} not found in the candidates list.'
-            )
+            if not any(item["labels"]):
+                raise ValueError(
+                    f'Query molecule {item["mol"]} not found in the candidates list.'
+                )
 
         # TODO: it should be refactored this way to a dict in the MassSpecDataset constructor
         #       we don't refactor it now to avoid breaking changes
@@ -227,11 +234,17 @@ class RetrievalDataset(MassSpecDataset):
         # Transform the query and candidate molecules
         for key, transform in mol_transform.items():
             item[key] = transform(item["mol"]) if transform is not None else item["mol"]
-            item["candidates_"+key] = [transform(c) if transform is not None else c for c in item["candidates"]]
             if isinstance(item[key], np.ndarray):
                 item[key] = torch.as_tensor(item[key], dtype=self.dtype)
-                item["candidates_"+key] = torch.as_tensor(np.stack(item["candidates_"+key]), dtype=self.dtype)
-        del item["candidates"]
+            elif isinstance(item[key], torch.Tensor) and not item[key].is_floating_point() and key != "tokens":
+                item[key] = item[key].to(dtype=self.dtype)
+
+            if return_candidates:
+                item["candidates_"+key] = [transform(c) if transform is not None else c for c in candidates]
+                if isinstance(item["candidates_"+key][0], np.ndarray):
+                    item["candidates_"+key] = torch.as_tensor(np.stack(item["candidates_"+key]), dtype=self.dtype)
+                elif isinstance(item["candidates_"+key][0], torch.Tensor):
+                    item["candidates_"+key] = torch.stack(item["candidates_"+key]).to(dtype=self.dtype)
 
         return item
 
@@ -278,9 +291,10 @@ class RetrievalDataset(MassSpecDataset):
                     collated_batch[k] = default_collate([item[k] for item in batch])
 
         # Store the batch pointer reflecting the number of candidates per sample
-        collated_batch["batch_ptr"] = torch.as_tensor(
-            [len(item["candidates_smiles"]) for item in batch]
-        )
+        if "candidates_smiles" in collated_batch:
+            collated_batch["batch_ptr"] = torch.as_tensor(
+                [len(item["candidates_smiles"]) for item in batch]
+            )
 
         return collated_batch
 
@@ -317,7 +331,7 @@ class SimulationDataset(MassSpecDataset):
         # download if necessary
         if self.pth is None:
             self.pth = utils.hugging_face_download(
-                "MassSpecGym.tsv"
+                "MassSpecGym1.5.tsv"
             )
         else: 
             assert isinstance(self.pth, str)
@@ -427,7 +441,7 @@ class RetrievalSimulationDataset(SimulationDataset):
         # Download candidates from HuggigFace Hub
         if self.candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+                "molecules/MassSpecGym1.5_retrieval_candidates_mass.json"
             )
         else: 
             assert isinstance(self.candidates_pth, str)

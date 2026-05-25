@@ -139,3 +139,24 @@ dmypy.json
 
 # W&B
 wandb/
+
+# Data files (large)
+/data/*.tsv
+/data/*.mgf
+/data/*.hdf5
+/data/*.pkl
+/data/*.json
+/data/*.xlsx
+/data/pubchem*
+/data/test_results*/
+
+# Figures
+/figures/
+notebooks/**/figures/
+
+# SLURM / HPC job logs
+*.err
+*.out
+
+# Results
+/results/
