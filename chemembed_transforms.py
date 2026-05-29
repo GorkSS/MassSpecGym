@@ -66,15 +66,6 @@ class ChemEmbedMolTransform(MolTransform):
     
         return vec.astype(np.float32)  # numpy array shape (300,)
 
-    # def from_smiles(self, smiles: str):
-    #     mol = Chem.MolFromSmiles(smiles)
-    #     if mol is None:
-    #         return torch.zeros(300, dtype=torch.float32)
-
-    #     sentence = MolSentence(mol2alt_sentence(mol, radius=1))
-    #     vec = sentences2vec([sentence], self.model)[0]
-
-    #     return torch.tensor(vec, dtype=torch.float32)  # torch tensor shape (300,)
 
 
 class ChemBERTaMolTransform(MolTransform):
@@ -108,3 +99,15 @@ class MoLFormerMolTransform(MolTransform):
         with torch.no_grad():
             outputs = self.model(**inputs)
         return outputs.pooler_output[0].numpy().astype(np.float32)
+
+
+def chemberta_factory():
+    return ChemBERTaMolTransform()
+
+
+def molformer_factory():
+    return MoLFormerMolTransform()
+
+
+def mol2vec_factory():
+    return ChemEmbedMolTransform(model_path='Mol2Vec_model/model_300dim.pkl')
