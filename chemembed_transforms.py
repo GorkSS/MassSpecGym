@@ -71,34 +71,48 @@ class ChemEmbedMolTransform(MolTransform):
 class ChemBERTaMolTransform(MolTransform):
 
     def __init__(self, model_name: str = "DeepChem/ChemBERTa-100M-MLM"):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForMaskedLM.from_pretrained(model_name)
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name).to(self.device)
         self.model.eval()
 
-    def from_smiles(self, smiles: str) -> np.ndarray:
-        canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), canonical=True, isomericSmiles=False)
-        inputs = self.tokenizer(canonical, return_tensors="pt")
+    def from_smiles(self, smiles) -> np.ndarray:
+        is_single = isinstance(smiles, str)
+        smiles_list = [smiles] if is_single else smiles
+
+        canonical = [Chem.MolToSmiles(Chem.MolFromSmiles(s), canonical=True, isomericSmiles=False)
+                     for s in smiles_list]
+        inputs = self.tokenizer(canonical, padding=True, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = self.model(**inputs, output_hidden_states=True)
-        
-        hidden_states = outputs.hidden_states[-1] #Last layer
-        molecule_embeddings = hidden_states[:, 0, :] #CLS token
-        return molecule_embeddings[0].numpy().astype(np.float32)
+
+        hidden_states = outputs.hidden_states[-1]       #Last layer
+        embeddings = hidden_states[:, 0, :].cpu().numpy().astype(np.float32)  #CLS token
+        return embeddings[0] if is_single else embeddings
 
 
 class MoLFormerMolTransform(MolTransform):
 
     def __init__(self, model_name: str = "ibm/MoLFormer-XL-both-10pct"):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModel.from_pretrained(model_name, deterministic_eval=True, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(model_name, deterministic_eval=True, trust_remote_code=True).to(self.device)
         self.model.eval()
 
-    def from_smiles(self, smiles: str) -> np.ndarray:
-        canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), canonical=True, isomericSmiles=False)
-        inputs = self.tokenizer(canonical, return_tensors="pt")
+    def from_smiles(self, smiles) -> np.ndarray:
+        is_single = isinstance(smiles, str)
+        smiles_list = [smiles] if is_single else smiles
+
+        canonical = [Chem.MolToSmiles(Chem.MolFromSmiles(s), canonical=True, isomericSmiles=False)
+                     for s in smiles_list]
+        inputs = self.tokenizer(canonical, padding=True, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = self.model(**inputs)
-        return outputs.pooler_output[0].numpy().astype(np.float32)
+
+        embeddings = outputs.pooler_output.cpu().numpy().astype(np.float32)
+        return embeddings[0] if is_single else embeddings
 
 
 def chemberta_factory():
