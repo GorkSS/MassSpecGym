@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 import torch
 from torch_geometric.data import Batch
 from pathlib import Path
-import pickle
 
 from massspecgym.simulation_utils.feat_utils import MolGraphFeaturizer, get_fingerprints
 from massspecgym.simulation_utils.misc_utils import scatter_reduce
@@ -203,7 +202,7 @@ class SpecToMzsInts(SpecTransform):
 
 class MolTransform(ABC):
     @abstractmethod
-    def from_smiles(self, mol: str):
+    def from_smiles(self, smiles: str):
         """
         Convert a SMILES string to a tensor-like representation. Abstract method.
         """

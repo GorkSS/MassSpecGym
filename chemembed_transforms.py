@@ -96,8 +96,8 @@ class MoLFormerMolTransform(MolTransform):
 
     def __init__(self, model_name: str = "ibm/MoLFormer-XL-both-10pct"):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModel.from_pretrained(model_name, deterministic_eval=True, trust_remote_code=True).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, revision="main", trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(model_name, revision="main", deterministic_eval=True, trust_remote_code=True).to(self.device)
         self.model.eval()
 
     def from_smiles(self, smiles) -> np.ndarray:
