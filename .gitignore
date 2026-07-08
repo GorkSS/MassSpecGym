@@ -147,6 +147,7 @@ wandb/
 /data/*.mgf
 /data/*.hdf5
 /data/*.pkl
+/data/*.old
 /data/*.json
 /data/*.xlsx
 /data/pubchem*
