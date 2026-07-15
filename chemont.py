@@ -1,6 +1,7 @@
 import json
 import pandas as pd
 from pathlib import Path
+from ast import literal_eval
 
 class ChemontDict:
     def __init__(self, dict_path: Path) -> None:
@@ -23,6 +24,16 @@ class ChemontDict:
             return self.d[self.d[id]["parent_id"]]["name"]
         except KeyError:
             raise Exception(f"There's no ChemONT classification with id {id}")
+        
+    def get_names_of_tree(self, tree: list):
+        names = list()
+        for id in tree:
+            if id is not None:
+                names.append(self.get_name_of(id))
+            else:
+                names.append(None)
+
+        return names
 
 def load_chemont_dict(path: Path) -> dict:
     df = pd.read_csv(path, sep='\t')
@@ -40,3 +51,15 @@ def load_chemont_dict(path: Path) -> dict:
         chemont_d[new_key]['parent_id'] = int(parent_id) if parent_id != None else None
 
     return chemont_d
+
+# Function to parse list-like strings into real lists
+def format_chemont_tree(df: pd.DataFrame, chemont_column : str = 'chemont_tree'):
+    for index, row in df[df[chemont_column].notnull()].iterrows():
+        tree = row[chemont_column]
+        try:
+            new_tree = literal_eval(tree)
+        except ValueError:
+            if "null" in tree:
+                new_tree = literal_eval(tree.replace("null", "None"))
+
+        df.at[index, chemont_column] = new_tree
