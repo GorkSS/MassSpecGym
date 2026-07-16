@@ -152,6 +152,9 @@ wandb/
 /data/*.xlsx
 /data/pubchem*
 /data/test_results*/
+/data/val/
+/data/test/
+/data/train/
 models/
 
 # Figures
