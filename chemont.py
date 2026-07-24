@@ -2,6 +2,7 @@ import json
 import pandas as pd
 from pathlib import Path
 from ast import literal_eval
+from anytree import Node, RenderTree
 
 class ChemontDict:
     def __init__(self, dict_path: Path) -> None:
@@ -63,3 +64,19 @@ def format_chemont_tree(df: pd.DataFrame, chemont_column : str = 'chemont_tree')
                 new_tree = literal_eval(tree.replace("null", "None"))
 
         df.at[index, chemont_column] = new_tree
+
+def generate_classes_tree(df: pd.DataFrame, levels_to_generate: list = ["superclass", "subclass"]):
+    root = Node("Chemical entities")
+    prev_level = root
+    for i in range(1, len(levels_to_generate)):
+        aux_df = df[[levels_to_generate[i - 1], levels_to_generate[i]]]
+        classes = list(aux_df[levels_to_generate[i - 1]].drop_duplicates().keys())
+
+        for cls in classes:
+            parent = Node(cls, parent=prev_level)
+            subclasses = list(aux_df[aux_df[levels_to_generate[i - 1]] == cls][levels_to_generate[i]].drop_duplicates())
+            for subcls in subclasses:
+                Node(subcls, parent=parent)
+
+    for pre, fill, node in RenderTree(root):
+        print(f"{pre}{node.name}")
